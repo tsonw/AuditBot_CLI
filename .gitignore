@@ -1,0 +1,37 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# Local environment files
+.env
+.env.*
+
+# AuditBot generated outputs
+outputs/raw/*.json
+outputs/pcaps/*.pcap
+outputs/pcaps/*.pcapng
+
+# Test and coverage artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/
+
+# Logs
+*.log

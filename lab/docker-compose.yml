@@ -1,0 +1,196 @@
+x-linux-host: &linux-host
+  init: true
+  restart: unless-stopped
+
+services:
+  auditbot:
+    build:
+      context: ..
+      dockerfile: lab/auditbot.Dockerfile
+    container_name: auditbot-lab
+    working_dir: /app
+    stdin_open: true
+    tty: true
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - ..:/app
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    networks:
+      corp_net:
+        ipv4_address: 10.10.10.250
+      dmz_net:
+        ipv4_address: 10.10.20.250
+      mgmt_net:
+        ipv4_address: 10.10.30.250
+      user_net:
+        ipv4_address: 10.10.40.250
+
+  edge-gateway:
+    <<: *linux-host
+    build:
+      context: ..
+      dockerfile: lab/linux-host.Dockerfile
+      args:
+        BASE_IMAGE: ubuntu:24.04
+    image: auditbot-lab-ubuntu-host:24.04
+    container_name: lab-edge-gateway
+    hostname: edge-gateway
+    environment:
+      HOST_ROLE: edge-gateway
+      HTTP_PORTS: "8080,8443"
+      LISTEN_PORTS: "53,443,5000,8000,10000"
+    networks:
+      corp_net:
+        ipv4_address: 10.10.10.2
+      dmz_net:
+        ipv4_address: 10.10.20.2
+      mgmt_net:
+        ipv4_address: 10.10.30.2
+
+  corp-app-01:
+    <<: *linux-host
+    build:
+      context: ..
+      dockerfile: lab/linux-host.Dockerfile
+      args:
+        BASE_IMAGE: debian:12-slim
+    image: auditbot-lab-debian-host:12
+    container_name: lab-corp-app-01
+    hostname: corp-app-01
+    environment:
+      HOST_ROLE: corp-app
+      HTTP_PORTS: "3000,8080,9000"
+      LISTEN_PORTS: "443,5000,5672,8000,9200"
+    networks:
+      corp_net:
+        ipv4_address: 10.10.10.10
+      mgmt_net:
+        ipv4_address: 10.10.30.110
+
+  corp-db-01:
+    <<: *linux-host
+    build:
+      context: ..
+      dockerfile: lab/linux-host.Dockerfile
+      args:
+        BASE_IMAGE: ubuntu:24.04
+    image: auditbot-lab-ubuntu-host:24.04
+    container_name: lab-corp-db-01
+    hostname: corp-db-01
+    environment:
+      HOST_ROLE: corp-db
+      HTTP_PORTS: "8000"
+      LISTEN_PORTS: "3306,5432,6379,9200,9300"
+    networks:
+      corp_net:
+        ipv4_address: 10.10.10.20
+      mgmt_net:
+        ipv4_address: 10.10.30.120
+
+  dmz-proxy-01:
+    <<: *linux-host
+    build:
+      context: ..
+      dockerfile: lab/linux-host.Dockerfile
+      args:
+        BASE_IMAGE: debian:12-slim
+    image: auditbot-lab-debian-host:12
+    container_name: lab-dmz-proxy-01
+    hostname: dmz-proxy-01
+    environment:
+      HOST_ROLE: dmz-proxy
+      HTTP_PORTS: "8080,8443"
+      LISTEN_PORTS: "443,5000,8000,9000"
+    networks:
+      dmz_net:
+        ipv4_address: 10.10.20.10
+      corp_net:
+        ipv4_address: 10.10.10.30
+
+  dmz-api-01:
+    <<: *linux-host
+    build:
+      context: ..
+      dockerfile: lab/linux-host.Dockerfile
+      args:
+        BASE_IMAGE: ubuntu:24.04
+    image: auditbot-lab-ubuntu-host:24.04
+    container_name: lab-dmz-api-01
+    hostname: dmz-api-01
+    environment:
+      HOST_ROLE: dmz-api
+      HTTP_PORTS: "5000,8000,8080"
+      LISTEN_PORTS: "443,5672,9200"
+    networks:
+      dmz_net:
+        ipv4_address: 10.10.20.20
+
+  mgmt-monitor-01:
+    <<: *linux-host
+    build:
+      context: ..
+      dockerfile: lab/linux-host.Dockerfile
+      args:
+        BASE_IMAGE: ubuntu:24.04
+    image: auditbot-lab-ubuntu-host:24.04
+    container_name: lab-mgmt-monitor-01
+    hostname: mgmt-monitor-01
+    environment:
+      HOST_ROLE: mgmt-monitor
+      HTTP_PORTS: "3000,8000,9000"
+      LISTEN_PORTS: "5900,6379,9200,10000"
+    networks:
+      mgmt_net:
+        ipv4_address: 10.10.30.10
+      dmz_net:
+        ipv4_address: 10.10.20.30
+
+  user-workstation-01:
+    <<: *linux-host
+    build:
+      context: ..
+      dockerfile: lab/linux-host.Dockerfile
+      args:
+        BASE_IMAGE: debian:12-slim
+    image: auditbot-lab-debian-host:12
+    container_name: lab-user-workstation-01
+    hostname: user-workstation-01
+    environment:
+      HOST_ROLE: user-workstation
+      ENABLE_NGINX: "0"
+      HTTP_PORTS: "8000"
+      LISTEN_PORTS: "445,3000,5900,10000"
+    networks:
+      user_net:
+        ipv4_address: 10.10.40.10
+      corp_net:
+        ipv4_address: 10.10.10.50
+
+networks:
+  corp_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.10.0/24
+          gateway: 10.10.10.1
+  dmz_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.20.0/24
+          gateway: 10.10.20.1
+  mgmt_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.30.0/24
+          gateway: 10.10.30.1
+  user_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.40.0/24
+          gateway: 10.10.40.1
