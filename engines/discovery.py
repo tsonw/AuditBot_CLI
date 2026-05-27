@@ -1,9 +1,12 @@
 import os
+import ipaddress
+import subprocess
 
 import nmap
-from scanners.network import get_reachable_networks
+from scanners.network import get_reachable_networks, normalize_ip_mode
 from scanners.arp_scanner import ArpScanner
 from rich.console import Console
+from rich import box
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
@@ -17,12 +20,19 @@ NMAP_ARGUMENTS = f"-sV --version-light -p {NMAP_PORTS} -T4 --host-timeout 30s"
 NMAP_TIMEOUT_SECONDS = 45
 NMAP_HOST_DISCOVERY_ARGUMENTS = "-sn -T4 --host-timeout 10s"
 NMAP_HOST_DISCOVERY_TIMEOUT_SECONDS = 180
+COMPACT_TABLE_KWARGS = {
+       "box": box.SIMPLE,
+       "padding": (0, 1),
+       "show_lines": False,
+}
 
 
 def _render_networks_table(networks):
-       table = Table(title="Discovery Targets")
+       table = Table(title="Discovery Targets", **COMPACT_TABLE_KWARGS)
        table.add_column("#", justify="right")
        table.add_column("Network")
+       table.add_column("Scanner IP")
+       table.add_column("Family")
        table.add_column("Interface")
        table.add_column("Gateway")
        table.add_column("Source")
@@ -34,6 +44,8 @@ def _render_networks_table(networks):
               table.add_row(
                      str(index),
                      net["network"],
+                     net.get("ip") or "-",
+                     net.get("family") or "-",
                      net.get("interface") or "-",
                      net.get("via") or "-",
                      net.get("source") or "-",
@@ -45,25 +57,27 @@ def _render_networks_table(networks):
 
 
 def _render_hosts_table(hosts):
-       table = Table(title="Discovery Hosts")
+       table = Table(title="Discovery Hosts", **COMPACT_TABLE_KWARGS)
        table.add_column("#", justify="right")
        table.add_column("IP")
+       table.add_column("Hostname")
+       table.add_column("Family")
        table.add_column("MAC")
-       table.add_column("Network")
        table.add_column("Interface")
        table.add_column("Gateway")
        table.add_column("Method")
-       table.add_column("Ports")
        table.add_column("Service")
-       table.add_column("Version")
 
        for index, host in enumerate(hosts, start=1):
-              ports = ", ".join(str(port) for port in host.get("ports", []))
+              display_ip = _display_ip_with_prefix(
+                     host.get("ip"),
+                     host.get("source_network")
+              )
+              open_ports = host.get("ports", [])
               services = host.get("services", {})
-              service_names = []
-              service_versions = []
+              service_details = []
 
-              for port in host.get("ports", []):
+              for port in open_ports:
                      service = services.get(port) or services.get(str(port)) or {}
                      name = service.get("name") or "-"
                      product = service.get("product") or ""
@@ -73,30 +87,43 @@ def _render_hosts_table(hosts):
                             value for value in [product, version, extrainfo] if value
                      )
 
-                     service_names.append(f"{port}:{name}")
-                     service_versions.append(f"{port}:{version_text or '-'}")
+                     if version_text:
+                            service_details.append(f"{port}:{name} ({version_text})")
+                     else:
+                            service_details.append(f"{port}:{name}")
 
               table.add_row(
                      str(index),
-                     host.get("ip") or "-",
+                     display_ip,
+                     host.get("hostname") or "-",
+                     host.get("family") or "-",
                      host.get("mac") or "-",
-                     host.get("source_network") or "-",
                      host.get("source_interface") or "-",
                      host.get("source_gateway") or "-",
                      host.get("discovery_method") or "-",
-                     ports or "-",
-                     ", ".join(service_names) or "-",
-                     ", ".join(service_versions) or "-"
+                     ", ".join(service_details) or "-"
               )
 
        console.print(table)
+
+
+def _display_ip_with_prefix(ip_value, network_value):
+       if not ip_value:
+              return "-"
+
+       try:
+              network = ipaddress.ip_network(network_value, strict=False)
+       except (TypeError, ValueError):
+              return ip_value
+
+       return f"{ip_value}/{network.prefixlen}"
 
 
 def _render_errors_table(errors):
        if not errors:
               return
 
-       table = Table(title="Discovery Warnings")
+       table = Table(title="Discovery Warnings", **COMPACT_TABLE_KWARGS)
        table.add_column("Network")
        table.add_column("Interface")
        table.add_column("Error")
@@ -109,6 +136,54 @@ def _render_errors_table(errors):
               )
 
        console.print(table)
+
+
+def _clean_services(services):
+       clean = {}
+
+       for port, service in (services or {}).items():
+              clean[str(port)] = {
+                     key: service.get(key)
+                     for key in ["state", "name", "product", "version", "extrainfo"]
+                     if service.get(key)
+              }
+
+       return clean
+
+
+def _clean_host(host):
+       clean = {
+              "ip": host.get("ip"),
+              "hostname": host.get("hostname"),
+              "family": host.get("family"),
+              "mac": host.get("mac"),
+              "source_interface": host.get("source_interface"),
+              "source_network": host.get("source_network"),
+              "source_gateway": host.get("source_gateway"),
+              "discovery_method": host.get("discovery_method"),
+              "ports": host.get("ports") or [],
+              "services": _clean_services(host.get("services")),
+       }
+
+       return {
+              key: value
+              for key, value in clean.items()
+              if value not in (None, "", {}, [])
+       }
+
+
+def _clean_error(error):
+       clean = {
+              "network": error.get("network"),
+              "interface": error.get("interface"),
+              "error": error.get("error"),
+       }
+
+       return {
+              key: value
+              for key, value in clean.items()
+              if value not in (None, "")
+       }
 
 
 def _build_network_results(networks, hosts, errors):
@@ -130,11 +205,21 @@ def _build_network_results(networks, hosts, errors):
                      and error.get("interface") == interface
               ]
 
-              results.append({
-                     **net,
+              result = {
+                     "network": net.get("network"),
+                     "family": net.get("family"),
+                     "interface": net.get("interface"),
+                     "gateway": net.get("via"),
+                     "scan_method": net.get("scan_method"),
                      "hosts_found": len(network_hosts),
-                     "hosts": network_hosts,
-                     "errors": network_errors
+                     "hosts": [_clean_host(host) for host in network_hosts],
+                     "errors": [_clean_error(error) for error in network_errors],
+              }
+
+              results.append({
+                     key: value
+                     for key, value in result.items()
+                     if value not in (None, "", [], {})
               })
 
        return results
@@ -145,26 +230,214 @@ def _host_from_nmap(scanner, ip_address, net):
 
        return {
               "ip": ip_address,
+              "hostname": _hostname_from_nmap(scanner, ip_address),
+              "family": net.get("family") or _ip_family(ip_address),
               "mac": addresses.get("mac"),
               "source_interface": net["interface"],
               "source_network": net["network"],
               "source_gateway": net.get("via"),
-              "discovery_method": "nmap"
+              "discovery_method": net.get("scan_method") or "nmap"
        }
 
 
-def run_discovery():
+def _hostname_from_nmap(scanner, ip_address):
+       if ip_address not in scanner.all_hosts():
+              return None
 
-       networks = get_reachable_networks()
+       hostnames = scanner[ip_address].hostnames()
+
+       for hostname in hostnames:
+              name = hostname.get("name")
+              if name:
+                     return name
+
+       return None
+
+
+def _ip_family(value):
+       try:
+              return f"IPv{ipaddress.ip_address(str(value).split('%', 1)[0]).version}"
+       except ValueError:
+              return "-"
+
+
+def _nmap_target(ip_address, interface=None):
+       try:
+              address = ipaddress.ip_address(str(ip_address).split("%", 1)[0])
+       except ValueError:
+              return ip_address
+
+       if address.version == 6 and address.is_link_local and interface and "%" not in str(ip_address):
+              return f"{ip_address}%{interface}"
+
+       return ip_address
+
+
+def _nmap_arguments(base_arguments, family):
+       if family == "IPv6":
+              return f"-6 {base_arguments}"
+
+       return base_arguments
+
+
+def _scan_ipv6_neighbors(net):
+       interface = net.get("interface")
+       command = ["ip", "-6", "neigh", "show"]
+
+       if interface:
+              command.extend(["dev", interface])
+
+       try:
+              result = subprocess.run(
+                     command,
+                     capture_output=True,
+                     text=True,
+                     check=False
+              )
+       except FileNotFoundError:
+              return _scan_macos_ipv6_neighbors(net)
+
+       if result.returncode != 0:
+              details = result.stderr.strip() or "ip -6 neigh failed"
+              raise RuntimeError(details)
+
+       if result.stdout.strip() and "lladdr" not in result.stdout:
+              macos_hosts = _scan_macos_ipv6_neighbors(net)
+              if macos_hosts:
+                     return macos_hosts
+
+       network = ipaddress.IPv6Network(net["network"], strict=False)
+       hosts = []
+       seen = set()
+
+       for line in result.stdout.splitlines():
+              parts = line.split()
+
+              if not parts:
+                     continue
+
+              ip_value = parts[0].split("%", 1)[0]
+
+              try:
+                     ip = ipaddress.IPv6Address(ip_value)
+              except ValueError:
+                     continue
+
+              if ip not in network:
+                     continue
+
+              states = {part.lower() for part in parts}
+              if states & {"failed", "incomplete", "permanent"}:
+                     continue
+
+              mac = None
+              if "lladdr" in parts:
+                     index = parts.index("lladdr")
+                     if index + 1 < len(parts):
+                            mac = parts[index + 1].lower()
+
+              key = (ip_value, mac)
+              if key in seen:
+                     continue
+
+              seen.add(key)
+              hosts.append({
+                     "ip": ip_value,
+                     "family": "IPv6",
+                     "mac": mac,
+                     "source_interface": interface,
+                     "source_network": net["network"],
+                     "source_gateway": net.get("via"),
+                     "discovery_method": "ndp"
+              })
+
+       return hosts
+
+
+def _scan_macos_ipv6_neighbors(net):
+       interface = net.get("interface")
+
+       try:
+              result = subprocess.run(
+                     ["ndp", "-an"],
+                     capture_output=True,
+                     text=True,
+                     check=False
+              )
+       except FileNotFoundError as exc:
+              raise RuntimeError("IPv6 neighbor discovery requires ip or ndp") from exc
+
+       if result.returncode != 0:
+              details = result.stderr.strip() or "ndp -an failed"
+              raise RuntimeError(details)
+
+       network = ipaddress.IPv6Network(net["network"], strict=False)
+       hosts = []
+       seen = set()
+
+       for line in result.stdout.splitlines():
+              parts = line.split()
+
+              if len(parts) < 2:
+                     continue
+
+              raw_ip = parts[0].strip("()")
+              scoped_interface = None
+
+              if "%" in raw_ip:
+                     raw_ip, scoped_interface = raw_ip.split("%", 1)
+
+              row_interface = scoped_interface
+              if len(parts) > 2 and not row_interface:
+                     row_interface = parts[2]
+
+              if interface and row_interface and row_interface != interface:
+                     continue
+
+              states = {part.lower() for part in parts}
+              if "permanent" in states or "(incomplete)" in states or "incomplete" in states:
+                     continue
+
+              try:
+                     ip = ipaddress.IPv6Address(raw_ip)
+              except ValueError:
+                     continue
+
+              if ip not in network:
+                     continue
+
+              mac = parts[1].lower()
+              if mac in {"(incomplete)", "incomplete", "permanent"}:
+                     mac = None
+
+              key = (raw_ip, mac)
+              if key in seen:
+                     continue
+
+              seen.add(key)
+              hosts.append({
+                     "ip": raw_ip,
+                     "family": "IPv6",
+                     "mac": mac,
+                     "source_interface": interface,
+                     "source_network": net["network"],
+                     "source_gateway": net.get("via"),
+                     "discovery_method": "ndp"
+              })
+
+       return hosts
+
+
+def run_discovery(ip_mode: str | None = None):
+
+       mode = normalize_ip_mode(ip_mode)
+       networks = get_reachable_networks(mode)
 
        if not networks:
-              message = "No active IPv4 network found"
+              message = f"No active {mode.upper()} network found"
               console.print(f"[red]Discovery blocked:[/red] {message}")
               return {
-                     "network": {},
-                     "networks": [],
                      "network_results": [],
-                     "hosts": [],
                      "error": message
               }
 
@@ -225,12 +498,27 @@ def run_discovery():
                                    host["source_network"] = network
                                    host["source_gateway"] = net.get("via")
                                    host["discovery_method"] = "arp"
+                                   host["family"] = "IPv4"
+
+                     elif scan_method == "ndp":
+                            try:
+                                   network_hosts = _scan_ipv6_neighbors(net)
+                            except RuntimeError as exc:
+                                   message = str(exc)
+                                   errors.append({
+                                          "interface": interface,
+                                          "network": network,
+                                          "error": message
+                                   })
+                                   progress.advance(network_task)
+                                   continue
 
                      else:
                             try:
+                                   family = net.get("family") or "IPv4"
                                    route_scanner.scan(
                                           network,
-                                          arguments=NMAP_HOST_DISCOVERY_ARGUMENTS,
+                                          arguments=_nmap_arguments(NMAP_HOST_DISCOVERY_ARGUMENTS, family),
                                           timeout=NMAP_HOST_DISCOVERY_TIMEOUT_SECONDS
                                    )
                                    network_hosts = [
@@ -257,6 +545,7 @@ def run_discovery():
                                    continue
 
                      for host in network_hosts:
+                            host.setdefault("family", net.get("family") or _ip_family(host.get("ip")))
                             key = (host["source_network"], host["ip"], host.get("mac"))
                             if key in seen_hosts:
                                    continue
@@ -288,16 +577,19 @@ def run_discovery():
 
                             try:
                                    progress.update(enrich_task, description=f"Enriching {h['ip']}")
+                                   target = _nmap_target(h["ip"], h.get("source_interface"))
                                    scanner.scan(
-                                          h["ip"],
-                                          arguments=NMAP_ARGUMENTS,
+                                          target,
+                                          arguments=_nmap_arguments(NMAP_ARGUMENTS, h.get("family")),
                                           timeout=NMAP_TIMEOUT_SECONDS
                                    )
+                                   nmap_host = scanner.all_hosts()[0] if scanner.all_hosts() else target
 
                                    enriched.append({
                                           **h,
-                                          "ports": scanner[h["ip"]].all_tcp() if h["ip"] in scanner.all_hosts() else [],
-                                          "services": scanner[h["ip"]].get("tcp", {}) if h["ip"] in scanner.all_hosts() else {}
+                                          "hostname": _hostname_from_nmap(scanner, nmap_host) or h.get("hostname"),
+                                          "ports": scanner[nmap_host].all_tcp() if nmap_host in scanner.all_hosts() else [],
+                                          "services": scanner[nmap_host].get("tcp", {}) if nmap_host in scanner.all_hosts() else {}
                                    })
 
                             except nmap.PortScannerTimeout:
@@ -324,9 +616,5 @@ def run_discovery():
        network_results = _build_network_results(networks, enriched, errors)
 
        return {
-              "network": networks[0],
-              "networks": networks,
-              "network_results": network_results,
-              "hosts": enriched,
-              "errors": errors
+              "network_results": network_results
        }
