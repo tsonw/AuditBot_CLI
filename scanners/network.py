@@ -55,6 +55,17 @@ def _default_interface(version: int):
        return default_gateway[1]
 
 
+def _default_gateway(version: int):
+       gateways = netifaces.gateways()
+       address_family = netifaces.AF_INET if version == 4 else netifaces.AF_INET6
+       default_gateway = gateways.get("default", {}).get(address_family)
+
+       if not default_gateway:
+              return None
+
+       return _clean_ipv6_address(default_gateway[0]) if version == 6 else default_gateway[0]
+
+
 def _default_ipv4_interface():
        return _default_interface(4)
 
@@ -92,6 +103,8 @@ def get_local_networks(ip_mode: str | None = None):
        mode = normalize_ip_mode(ip_mode)
        default_ipv4_interface = _default_interface(4)
        default_ipv6_interface = _default_interface(6)
+       default_ipv4_gateway = _default_gateway(4)
+       default_ipv6_gateway = _default_gateway(6)
        networks = []
        seen = set()
 
@@ -130,7 +143,7 @@ def get_local_networks(ip_mode: str | None = None):
                                    "network": str(network),
                                    "family": _family_label(4),
                                    "is_default": interface == default_ipv4_interface,
-                                   "via": None,
+                                   "via": default_ipv4_gateway if interface == default_ipv4_interface else None,
                                    "source": "interface",
                                    "scan_method": "arp"
                             })
@@ -169,7 +182,7 @@ def get_local_networks(ip_mode: str | None = None):
                                    "network": str(network),
                                    "family": _family_label(6),
                                    "is_default": interface == default_ipv6_interface,
-                                   "via": None,
+                                   "via": default_ipv6_gateway if interface == default_ipv6_interface else None,
                                    "source": "interface",
                                    "scan_method": "ndp"
                             })
