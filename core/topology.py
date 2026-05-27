@@ -77,6 +77,7 @@ def _group_hosts_by_identity(hosts):
 
 def _service_label(port, service):
        name = service.get("name") or "unknown"
+       protocol = service.get("protocol") or "tcp"
        product = service.get("product") or ""
        version = service.get("version") or ""
        extrainfo = service.get("extrainfo") or ""
@@ -84,9 +85,9 @@ def _service_label(port, service):
        detail = " ".join(value for value in [product, version, extrainfo] if value)
 
        if detail:
-              return f"{port}/tcp {name} ({detail}) [{state}]"
+              return f"{port}/{protocol} {name} ({detail}) [{state}]"
 
-       return f"{port}/tcp {name} [{state}]"
+       return f"{port}/{protocol} {name} [{state}]"
 
 
 def _group_hosts_by_network(data):
