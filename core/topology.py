@@ -26,9 +26,10 @@ def _has_topology_data(data):
 
 def _sort_ip(value):
        try:
-              return ipaddress.IPv4Address(value or "0.0.0.0")
+              address = ipaddress.ip_address(str(value or "0.0.0.0").split("%", 1)[0])
+              return (address.version, int(address))
        except (TypeError, ValueError):
-              return ipaddress.IPv4Address("0.0.0.0")
+              return (0, 0)
 
 
 def _sort_port(value):
@@ -36,6 +37,42 @@ def _sort_port(value):
               return int(value)
        except (TypeError, ValueError):
               return 0
+
+
+def _display_ip_with_prefix(ip_value, network_value):
+       if not ip_value:
+              return "-"
+
+       try:
+              network = ipaddress.ip_network(network_value, strict=False)
+       except (TypeError, ValueError):
+              return ip_value
+
+       return f"{ip_value}/{network.prefixlen}"
+
+
+def _host_identity(host):
+       hostname = (host.get("hostname") or "").strip()
+
+       if hostname:
+              return ("hostname", hostname.lower(), hostname)
+
+       mac = (host.get("mac") or "").strip().lower()
+       if mac:
+              return ("mac", mac, f"unknown ({mac})")
+
+       ip = host.get("ip") or "unknown"
+       return ("ip", ip, f"unknown ({ip})")
+
+
+def _group_hosts_by_identity(hosts):
+       grouped = {}
+
+       for host in hosts:
+              key = _host_identity(host)
+              grouped.setdefault(key, []).append(host)
+
+       return grouped
 
 
 def _service_label(port, service):
@@ -120,54 +157,77 @@ def render_topology(data, source_label=None):
        if source_label:
               root.add(f"[dim]source: {escape(str(source_label))}[/dim]")
 
+       all_hosts = []
+
        for result in results:
-              network = result.get("network") or "unknown network"
-              interface = result.get("interface") or "-"
-              scanner_ip = result.get("ip") or "-"
-              source = result.get("source") or "-"
-              scan_method = result.get("scan_method") or "-"
-              hosts = sorted(result.get("hosts", []), key=lambda host: _sort_ip(host.get("ip")))
-              host_count = result.get("hosts_found", len(hosts))
-
-              net_node = root.add(
-                     "[bold]Network[/bold] "
-                     f"[cyan]{escape(network)}[/cyan] "
-                     f"[dim]interface={escape(interface)} source={escape(source)} "
-                     f"scan={escape(scan_method)} hosts={host_count}[/dim]"
-              )
-
-              net_node.add(f"[dim]scanner ip: {escape(scanner_ip)}[/dim]")
-
-              if result.get("via"):
-                     net_node.add(f"[yellow]gateway: {escape(result['via'])}[/yellow]")
+              all_hosts.extend(result.get("hosts", []))
 
               for error in result.get("errors", []):
                      message = error.get("error") or "unknown warning"
-                     net_node.add(f"[red]warning: {escape(message)}[/red]")
-
-              if not hosts:
-                     net_node.add("[dim]no hosts discovered[/dim]")
-                     continue
-
-              for host in hosts:
-                     ip = host.get("ip") or "-"
-                     mac = host.get("mac") or "-"
-                     method = host.get("discovery_method") or "-"
-                     host_node = net_node.add(
-                            f"[green]{escape(ip)}[/green] "
-                            f"[dim]mac={escape(mac)} method={escape(method)}[/dim]"
+                     network = error.get("network") or result.get("network") or "unknown network"
+                     root.add(
+                            f"[red]warning:[/red] {escape(network)} "
+                            f"[dim]{escape(message)}[/dim]"
                      )
 
-                     ports = host.get("ports") or []
-                     services = host.get("services") or {}
+       if not all_hosts:
+              root.add("[dim]no hosts discovered[/dim]")
+              console.print(root)
+              return True
 
-                     if not ports:
-                            host_node.add("[dim]no open ports found in scanned range[/dim]")
-                            continue
+       grouped_hosts = _group_hosts_by_identity(all_hosts)
 
-                     for port in sorted(ports, key=_sort_port):
-                            service = services.get(port) or services.get(str(port)) or {}
-                            host_node.add(escape(_service_label(port, service)))
+       for identity, hosts in sorted(grouped_hosts.items(), key=lambda item: item[0][2].lower()):
+              hostname = identity[2]
+              hosts_by_interface = {}
+
+              for host in hosts:
+                     interface_key = (
+                            host.get("source_interface") or "-",
+                            host.get("source_network") or "-",
+                            host.get("family") or "-",
+                            host.get("mac") or "-",
+                            host.get("discovery_method") or "-",
+                     )
+                     hosts_by_interface.setdefault(interface_key, []).append(host)
+
+              host_node = root.add(
+                     f"[bold green]Host[/bold green] {escape(hostname)} "
+                     f"[dim]interfaces={len(hosts_by_interface)} ips={len(hosts)}[/dim]"
+              )
+
+              for interface_key, interface_hosts in sorted(
+                     hosts_by_interface.items(),
+                     key=lambda item: (item[0][0], item[0][1], item[0][2])
+              ):
+                     interface, network, family, mac, method = interface_key
+                     interface_node = host_node.add(
+                            f"[bold]Interface[/bold] {escape(interface)} "
+                            f"[dim]network={escape(network)} family={escape(family)} "
+                            f"mac={escape(mac)} method={escape(method)}[/dim]"
+                     )
+
+                     for host in sorted(interface_hosts, key=lambda item: _sort_ip(item.get("ip"))):
+                            ip_label = _display_ip_with_prefix(
+                                   host.get("ip"),
+                                   host.get("source_network")
+                            )
+                            gateway = host.get("source_gateway") or "-"
+                            ip_node = interface_node.add(
+                                   f"[cyan]{escape(ip_label)}[/cyan] "
+                                   f"[dim]gateway={escape(gateway)}[/dim]"
+                            )
+
+                            ports = host.get("ports") or []
+                            services = host.get("services") or {}
+
+                            if not ports:
+                                   ip_node.add("[dim]no open ports found in scanned range[/dim]")
+                                   continue
+
+                            for port in sorted(ports, key=_sort_port):
+                                   service = services.get(port) or services.get(str(port)) or {}
+                                   ip_node.add(escape(_service_label(port, service)))
 
        console.print(root)
        return True
