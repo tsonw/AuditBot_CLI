@@ -9,10 +9,10 @@ from rich.tree import Tree
 console = Console()
 
 SCAN_PREFIXES = (
+       "comprehensive_audit",
        "full_scan",
        "discovery",
        "lab_discovery",
-       "audit_snapshot",
 )
 
 
@@ -51,25 +51,41 @@ def _display_ip_with_prefix(ip_value, network_value):
        return f"{ip_value}/{network.prefixlen}"
 
 
-def _host_identity(host):
-       hostname = (host.get("hostname") or "").strip()
+def _asset_identity(host):
+       asset_id = host.get("asset_id")
+       if asset_id:
+              return asset_id
 
+       hostname = (host.get("hostname") or "").strip()
        if hostname:
-              return ("hostname", hostname.lower(), hostname)
+              return f"hostname:{hostname.lower()}"
 
        mac = (host.get("mac") or "").strip().lower()
        if mac:
-              return ("mac", mac, f"unknown ({mac})")
+              return f"mac:{mac}"
 
        ip = host.get("ip") or "unknown"
-       return ("ip", ip, f"unknown ({ip})")
+       return f"ip:{ip}"
+
+
+def _asset_label(hosts):
+       host = hosts[0]
+       hostname = (host.get("hostname") or "").strip()
+       if hostname:
+              return hostname
+
+       mac = (host.get("mac") or "").strip().lower()
+       if mac:
+              return f"unknown ({mac})"
+
+       return f"unknown ({host.get('ip') or 'no-ip'})"
 
 
 def _group_hosts_by_identity(hosts):
        grouped = {}
 
        for host in hosts:
-              key = _host_identity(host)
+              key = _asset_identity(host)
               grouped.setdefault(key, []).append(host)
 
        return grouped
@@ -126,7 +142,7 @@ def _group_hosts_by_network(data):
        return results
 
 
-def load_latest_topology_snapshot(output_dir=Path("outputs/raw")):
+def load_latest_topology_snapshot(output_dir=Path("output/raw")):
        if not output_dir.exists():
               return None, None
 
@@ -156,7 +172,7 @@ def render_topology(data, source_label=None):
        root = Tree("[bold cyan]Infrastructure Topology[/bold cyan]")
 
        if source_label:
-              root.add(f"[dim]source: {escape(str(source_label))}[/dim]")
+              root.add(f"[yellow]source: {escape(str(source_label))}[/yellow]")
 
        all_hosts = []
 
@@ -168,18 +184,18 @@ def render_topology(data, source_label=None):
                      network = error.get("network") or result.get("network") or "unknown network"
                      root.add(
                             f"[red]warning:[/red] {escape(network)} "
-                            f"[dim]{escape(message)}[/dim]"
+                            f"[yellow]{escape(message)}[/yellow]"
                      )
 
        if not all_hosts:
-              root.add("[dim]no hosts discovered[/dim]")
+              root.add("[yellow]no hosts discovered[/yellow]")
               console.print(root)
               return True
 
        grouped_hosts = _group_hosts_by_identity(all_hosts)
 
-       for identity, hosts in sorted(grouped_hosts.items(), key=lambda item: item[0][2].lower()):
-              hostname = identity[2]
+       for asset_id, hosts in sorted(grouped_hosts.items(), key=lambda item: _asset_label(item[1]).lower()):
+              hostname = _asset_label(hosts)
               hosts_by_interface = {}
 
               for host in hosts:
@@ -194,18 +210,27 @@ def render_topology(data, source_label=None):
 
               host_node = root.add(
                      f"[bold green]Host[/bold green] {escape(hostname)} "
-                     f"[dim]interfaces={len(hosts_by_interface)} ips={len(hosts)}[/dim]"
+                     f"[yellow]asset_id={escape(asset_id)} "
+                     f"confidence={escape(hosts[0].get('identity_confidence') or 'unknown')} "
+                     f"interfaces={len(hosts_by_interface)} ips={len(hosts)}[/yellow]"
               )
+
+              if hosts[0].get("identity_reason"):
+                     host_node.add(
+                            f"[yellow]identity: {escape(hosts[0]['identity_reason'])}[/yellow]"
+                     )
 
               for interface_key, interface_hosts in sorted(
                      hosts_by_interface.items(),
                      key=lambda item: (item[0][0], item[0][1], item[0][2])
               ):
                      interface, network, family, mac, method = interface_key
+                     interface_id = interface_hosts[0].get("interface_id") or "-"
                      interface_node = host_node.add(
                             f"[bold]Interface[/bold] {escape(interface)} "
-                            f"[dim]network={escape(network)} family={escape(family)} "
-                            f"mac={escape(mac)} method={escape(method)}[/dim]"
+                            f"[yellow]network={escape(network)} family={escape(family)} "
+                            f"interface_id={escape(interface_id)} mac={escape(mac)} "
+                            f"method={escape(method)}[/yellow]"
                      )
 
                      for host in sorted(interface_hosts, key=lambda item: _sort_ip(item.get("ip"))):
@@ -216,14 +241,14 @@ def render_topology(data, source_label=None):
                             gateway = host.get("source_gateway") or "-"
                             ip_node = interface_node.add(
                                    f"[cyan]{escape(ip_label)}[/cyan] "
-                                   f"[dim]gateway={escape(gateway)}[/dim]"
+                                   f"[yellow]gateway={escape(gateway)}[/yellow]"
                             )
 
                             ports = host.get("ports") or []
                             services = host.get("services") or {}
 
                             if not ports:
-                                   ip_node.add("[dim]no open ports found in scanned range[/dim]")
+                                   ip_node.add("[yellow]no open ports found in scanned range[/yellow]")
                                    continue
 
                             for port in sorted(ports, key=_sort_port):

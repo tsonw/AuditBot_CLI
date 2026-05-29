@@ -1,7 +1,13 @@
+from rich import box
 from rich.console import Console
+from rich.table import Table
 
+from config.nvd_config import START_YEAR
 from engines.discovery import run_discovery
 from engines.dhcp_analyzer import run_dhcp_diagnostics
+from vulnerabilities.nvd_downloader import NvdDownloadError, download_modified_feed, download_year_feeds
+from vulnerabilities.nvd_importer import import_nvd_json, init_db
+from vulnerabilities.vuln_analyzer import DEFAULT_REPORT_PATTERN, analyze_scan_file
 
 from collectors.raw_writer import write_raw_file
 
@@ -13,6 +19,8 @@ from utils.banner import show_banner
 console = Console()
 
 LAST_DATA = {}
+
+LOCAL_NVD_NOTABLE_MIN_SCORE = 7.0
 
 
 def _select_ip_mode():
@@ -93,11 +101,13 @@ def _run_dhcp_menu():
 
 def _show_help():
        console.print("\n[bold cyan]=== AuditBot Help ===[/bold cyan]\n")
-       console.print("[bold]1. Full Flow[/bold]")
+       console.print("[bold]1. Comprehensive Audit (DHCP + Vulnerability Scan)[/bold]")
        console.print("- Detects the local network.")
        console.print("- Runs infrastructure discovery.")
-       console.print("- Saves a raw JSON snapshot.")
        console.print("- Runs passive DHCP client monitoring and classifies DHCP behavior per client MAC.")
+       console.print("- Runs local NVD vulnerability analysis against discovered services.")
+       console.print("- Saves a comprehensive raw JSON snapshot with discovery, DHCP, and vulnerability summary.")
+       console.print("- Asks whether to generate a PDF report at the end.")
        console.print("- Skips DHCP diagnostics in IPv6-only mode because DHCP analysis is currently DHCPv4-focused.")
        console.print()
        console.print("[bold]2. Infrastructure Discovery (ARP + Nmap)[/bold]")
@@ -116,19 +126,196 @@ def _show_help():
        console.print()
        console.print("[bold]4. Draw Topology[/bold]")
        console.print("- Draws topology from the latest scan data.")
-       console.print("- Groups devices by hostname first.")
-       console.print("- Lists each interface and IP under that hostname.")
+       console.print("- Groups devices by asset identity, with hostname used as the display label when available.")
+       console.print("- Keeps each interface/IP separate under the asset to handle multi-interface hosts.")
+       console.print("- Splits same-hostname observations in the same network when needed to avoid merging duplicate hosts.")
        console.print("- Lists open ports with service name and version under each IP.")
        console.print()
-       console.print("[bold]5. Export Last Data[/bold]")
-       console.print("- Exports the latest in-session scan or diagnostic data to a raw JSON file.")
-       console.print("- Useful for review, debugging, or drawing topology later.")
+       console.print("[bold]5. Vulnerability Scan with Local NVD Database[/bold]")
+       console.print("- Runs a fresh infrastructure discovery scan first.")
+       console.print("- Saves the scan result as a raw JSON file.")
+       console.print("- Analyzes the new scan result with the local SQLite NVD database.")
+       console.print("- Displays notable CRITICAL/HIGH or CVSS >= 7.0 vulnerabilities after analysis.")
+       console.print("- Warns before analysis when the local database was last updated 3 or more days ago.")
+       console.print(f"- Writes results to {DEFAULT_REPORT_PATTERN}.")
        console.print()
-       console.print("[bold]6. Help[/bold]")
+       console.print("[bold]6. Init NVD Local Database[/bold]")
+       console.print("- Creates the local SQLite CVE database.")
+       console.print("- Downloads official NVD JSON 2.0 yearly feeds from START_YEAR through the current year.")
+       console.print("- Imports CVE, CVSS, CWE, descriptions, and CPE match ranges into SQLite.")
+       console.print("- Does not use the NVD API.")
+       console.print()
+       console.print("[bold]7. Update NVD Local Database (Latest Modified Feed)[/bold]")
+       console.print("- Downloads the official NVD JSON 2.0 modified feed.")
+       console.print("- Replaces changed CVE rows and refreshes their CPE matches in SQLite.")
+       console.print()
+       console.print("[bold]8. Help[/bold]")
        console.print("- Shows this help screen.")
        console.print()
-       console.print("[bold]7. Exit[/bold]")
+       console.print("[bold]9. Exit[/bold]")
        console.print("- Exits AuditBot.")
+
+
+def _init_nvd_local_database_menu():
+       console.print("[bold cyan][NVD] Initializing local database from yearly feeds...[/bold cyan]")
+       console.print(f"[yellow]START_YEAR is {START_YEAR}. This can download many official NVD feed files.[/yellow]")
+       init_db()
+       json_paths = download_year_feeds(START_YEAR)
+
+       for json_path in json_paths:
+              import_nvd_json(json_path)
+
+       console.print(f"[green]NVD local database initialized. Feeds imported: {len(json_paths)}[/green]")
+
+
+def _update_nvd_local_database_menu():
+       console.print("[bold cyan][NVD] Updating local database from modified feed...[/bold cyan]")
+       init_db()
+       try:
+              json_path = download_modified_feed()
+       except NvdDownloadError as exc:
+              console.print(str(exc), style="red", markup=False)
+              return
+
+       import_nvd_json(json_path)
+       console.print("[green]NVD local database updated.[/green]")
+
+
+def _run_local_nvd_vulnerability_scan_menu():
+       global LAST_DATA
+
+       console.print("[bold cyan][1] Running fresh discovery scan for local NVD analysis...[/bold cyan]")
+       scan_data = run_discovery(ip_mode="auto")
+       scan_data["ip_mode"] = "auto"
+       LAST_DATA = scan_data
+
+       scan_file = write_raw_file(scan_data, "local_nvd_vulnerability_discovery")
+       console.print(f"[green]Discovery JSON exported:[/green] {scan_file}")
+       console.print("[bold cyan][2] Analyzing scan result with local NVD database...[/bold cyan]")
+
+       try:
+              report = analyze_scan_file(scan_file, warning_handler=_print_warning)
+       except (FileNotFoundError, ValueError) as exc:
+              console.print(f"[red]Local NVD vulnerability scan stopped:[/red] {exc}")
+              return
+
+       report_file = report.get("report_file") or DEFAULT_REPORT_PATTERN
+       total_vulns = sum(item.get("vulnerabilities_count", 0) for item in report.get("results", []))
+       console.print(f"[green]Vulnerability report exported:[/green] {report_file}")
+       console.print(f"[green]Services analyzed:[/green] {len(report.get('results', []))}")
+       console.print(f"[green]Vulnerabilities matched:[/green] {total_vulns}")
+       _render_local_nvd_notable_vulnerabilities(report, report_file=report_file)
+
+
+def _print_warning(message):
+       console.print(message, style="red", markup=False)
+
+
+def _render_local_nvd_notable_vulnerabilities(report, limit=15, report_file=DEFAULT_REPORT_PATTERN):
+       notable = _collect_local_nvd_notable_vulnerabilities(report)
+
+       if not notable:
+              console.print("[green]No notable local NVD vulnerabilities found.[/green]")
+              return
+
+       table = Table(
+              title="Notable Local NVD Vulnerabilities",
+              box=box.SIMPLE,
+              padding=(0, 1),
+              show_lines=False,
+       )
+       table.add_column("#", justify="right")
+       table.add_column("Host")
+       table.add_column("Service")
+       table.add_column("Product")
+       table.add_column("CVE")
+       table.add_column("Score", justify="right")
+       table.add_column("Severity")
+       table.add_column("Recommendation")
+
+       for index, item in enumerate(notable[:limit], start=1):
+              vulnerability = item["vulnerability"]
+              service = item["service"]
+              table.add_row(
+                     str(index),
+                     service.get("host") or "-",
+                     _local_nvd_service_label(service),
+                     _local_nvd_product_label(service),
+                     vulnerability.get("cve_id") or "-",
+                     _local_nvd_score_label(vulnerability.get("cvss_score")),
+                     _local_nvd_severity_label(vulnerability.get("severity") or vulnerability.get("risk")),
+                     vulnerability.get("recommendation") or "-",
+              )
+
+       console.print(table)
+
+       remaining = len(notable) - limit
+       if remaining > 0:
+              console.print(f"[yellow]{remaining} additional notable vulnerabilities are available in {report_file}.[/yellow]")
+
+
+def _collect_local_nvd_notable_vulnerabilities(report):
+       notable = []
+
+       for service in report.get("results", []):
+              for vulnerability in service.get("vulnerabilities", []):
+                     score = _safe_float(vulnerability.get("cvss_score"))
+                     severity = str(vulnerability.get("severity") or vulnerability.get("risk") or "").lower()
+
+                     if severity in {"critical", "high"} or score >= LOCAL_NVD_NOTABLE_MIN_SCORE:
+                            notable.append({
+                                   "service": service,
+                                   "vulnerability": vulnerability,
+                                   "score": score,
+                            })
+
+       return sorted(notable, key=lambda item: item["score"], reverse=True)
+
+
+def _local_nvd_service_label(service):
+       port = service.get("port") or "-"
+       protocol = service.get("protocol") or "tcp"
+       name = service.get("service") or "-"
+       return f"{port}/{protocol}:{name}"
+
+
+def _local_nvd_product_label(service):
+       return " ".join(
+              value
+              for value in [service.get("product"), service.get("version")]
+              if value
+       ) or "-"
+
+
+def _local_nvd_score_label(score):
+       score_value = _safe_float(score)
+       label = "-" if score in (None, "") else str(score)
+
+       if score_value >= 9.0:
+              return f"[bold red]{label}[/bold red]"
+       if score_value >= 7.0:
+              return f"[red]{label}[/red]"
+       return label
+
+
+def _local_nvd_severity_label(severity):
+       value = str(severity or "-")
+       normalized = value.lower()
+
+       if normalized == "critical":
+              return f"[bold red]{value}[/bold red]"
+       if normalized == "high":
+              return f"[red]{value}[/red]"
+       if normalized == "medium":
+              return f"[yellow]{value}[/yellow]"
+       return value
+
+
+def _safe_float(value):
+       try:
+              return float(value or 0)
+       except (TypeError, ValueError):
+              return 0.0
 
 
 def menu():
@@ -140,13 +327,15 @@ def menu():
        while True:
 
               console.print("\n[bold cyan]=== AuditBot Pro ===[/bold cyan]")
-              console.print("1. Full Flow")
+              console.print("1. Comprehensive Audit (DHCP + Vulnerability Scan)")
               console.print("2. Infrastructure Discovery (ARP + Nmap)")
               console.print("3. DHCP Diagnostics")
               console.print("4. Draw topology (last scan)")
-              console.print("5. Export last data")
-              console.print("6. Help")
-              console.print("7. Exit")
+              console.print("5. Vulnerability Scan with Local NVD Database")
+              console.print("6. Init NVD Local Database")
+              console.print("7. Update NVD Local Database (Latest Modified Feed)")
+              console.print("8. Help")
+              console.print("9. Exit")
 
               choice = console.input("Select: ")
               console.clear()
@@ -179,10 +368,16 @@ def menu():
                                    )
 
               elif choice == "5":
-                     write_raw_file(LAST_DATA, "audit_snapshot")
+                     _run_local_nvd_vulnerability_scan_menu()
 
               elif choice == "6":
-                     _show_help()
+                     _init_nvd_local_database_menu()
 
               elif choice == "7":
+                     _update_nvd_local_database_menu()
+
+              elif choice == "8":
+                     _show_help()
+
+              elif choice == "9":
                      break
