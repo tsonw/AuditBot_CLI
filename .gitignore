@@ -1,37 +1,54 @@
-# Python cache
+# Python bytecode and caches
 __pycache__/
 *.py[cod]
 *$py.class
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
 
 # Virtual environments
 venv/
 .venv/
 env/
-.env/
 
-# Local environment files
+# Local environment and secrets
 .env
 .env.*
+!.env.example
 
-# AuditBot generated outputs
-outputs/raw/*.json
-outputs/pcaps/*.pcap
-outputs/pcaps/*.pcapng
+# Local NVD feeds, cache, and SQLite database
+data/nvd/raw/
+data/nvd/cache/
+data/nvd/db/
+
+# AuditBot runtime artifacts
+output/
+
+# Legacy runtime artifacts kept out of git while old local runs exist
+outputs/
+
+# Packet captures and generated reports wherever they are placed
+*.pcap
+*.pcapng
+*.pdf
 
 # Test and coverage artifacts
-.pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
+coverage.xml
 
 # Build artifacts
 build/
 dist/
 *.egg-info/
 
-# Editor and OS files
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+
+# Editor, IDE, and OS files
 .DS_Store
 .idea/
 .vscode/
-
-# Logs
-*.log

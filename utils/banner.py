@@ -12,4 +12,4 @@ def show_banner():
 ╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═╝   ╚═╝   ╚═════╝  ╚═════╝    ╚═╝        ╚═════╝╚══════╝╚═╝
 """
         console.print(banner, style="bold cyan")
-        console.print("Network Audit & Infrastructure Scanner", style="dim")
+        console.print("Network Audit & Infrastructure Scanner", style="yellow")

@@ -90,11 +90,11 @@ def main():
         "-o",
         "--output",
         default=None,
-        help="Output PCAP path. Defaults to outputs/pcaps/dhcp_<scenario>.pcap.",
+        help="Output PCAP path. Defaults to output/pcaps/dhcp_<scenario>.pcap.",
     )
     args = parser.parse_args()
 
-    output = Path(args.output or f"outputs/pcaps/dhcp_{args.scenario}.pcap")
+    output = Path(args.output or f"output/pcaps/dhcp_{args.scenario}.pcap")
     output.parent.mkdir(parents=True, exist_ok=True)
 
     wrpcap(str(output), build_scenario(args.scenario))
