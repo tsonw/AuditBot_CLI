@@ -11,12 +11,13 @@ console = Console()
 
 
 class PacketCaptureService:
-       def __init__(self, output_dir="outputs/pcaps"):
+       def __init__(self, output_dir="output/pcaps"):
               self.output_dir = Path(output_dir)
 
        def capture(self, interface, duration_seconds, prefix="capture", capture_filter=None):
               self.output_dir.mkdir(parents=True, exist_ok=True)
-              filename = self.output_dir / f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pcap"
+              timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+              filename = _unique_output_file(self.output_dir, f"{prefix}_{timestamp}", ".pcap")
 
               console.print(
                      f"[cyan]Capturing traffic:[/cyan] {interface} "
@@ -78,3 +79,14 @@ class PacketCaptureService:
               os.chmod(filename, 0o644)
               console.print(f"[green]Capture saved:[/green] {filename}")
               return str(filename)
+
+
+def _unique_output_file(output_dir, stem, suffix):
+       output_file = output_dir / f"{stem}{suffix}"
+       counter = 1
+
+       while output_file.exists():
+              output_file = output_dir / f"{stem}_{counter}{suffix}"
+              counter += 1
+
+       return output_file

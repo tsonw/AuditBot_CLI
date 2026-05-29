@@ -1,10 +1,13 @@
+from engines.discovery_services.identity import assign_asset_identities
+
+
 def clean_services(services):
        clean = {}
 
        for port, service in (services or {}).items():
               clean[str(port)] = {
                      key: service.get(key)
-                     for key in ["protocol", "state", "name", "product", "version", "extrainfo"]
+                     for key in ["protocol", "state", "name", "product", "version", "extrainfo", "cpe"]
                      if service.get(key)
               }
 
@@ -15,6 +18,11 @@ def clean_host(host):
        clean = {
               "ip": host.get("ip"),
               "hostname": host.get("hostname"),
+              "asset_id": host.get("asset_id"),
+              "interface_id": host.get("interface_id"),
+              "identity_source": host.get("identity_source"),
+              "identity_confidence": host.get("identity_confidence"),
+              "identity_reason": host.get("identity_reason"),
               "os": host.get("os"),
               "family": host.get("family"),
               "mac": host.get("mac"),
@@ -48,6 +56,7 @@ def clean_error(error):
 
 
 def build_network_results(networks, hosts, errors):
+       assign_asset_identities(hosts)
        results = []
 
        for net in networks:

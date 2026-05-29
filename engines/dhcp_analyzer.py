@@ -202,9 +202,11 @@ def get_client_ip_context():
 
 
 def capture_dhcp_traffic(duration_seconds=DEFAULT_DHCP_CAPTURE_DURATION_SECONDS, interface=None):
-       Path("outputs/pcaps").mkdir(parents=True, exist_ok=True)
+       output_dir = Path("output/pcaps")
+       output_dir.mkdir(parents=True, exist_ok=True)
 
-       filename = f"outputs/pcaps/dhcp_capture_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pcap"
+       timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+       filename = str(_unique_output_file(output_dir, f"dhcp_capture_{timestamp}", ".pcap"))
        capture_interface = interface or get_client_ip_context().get("interface")
 
        if not capture_interface:
@@ -265,6 +267,17 @@ def capture_dhcp_traffic(duration_seconds=DEFAULT_DHCP_CAPTURE_DURATION_SECONDS,
        os.chmod(filename, 0o644)
        console.print(f"[green]DHCP capture saved:[/green] {filename}")
        return filename
+
+
+def _unique_output_file(output_dir, stem, suffix):
+       output_file = output_dir / f"{stem}{suffix}"
+       counter = 1
+
+       while output_file.exists():
+              output_file = output_dir / f"{stem}_{counter}{suffix}"
+              counter += 1
+
+       return output_file
 
 
 def _read_dhcp_packets(file_path):
