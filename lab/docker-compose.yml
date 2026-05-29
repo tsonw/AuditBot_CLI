@@ -128,6 +128,26 @@ services:
       dmz_net:
         ipv4_address: 10.10.20.20
 
+  vuln-web-01:
+    <<: *linux-host
+    build:
+      context: ..
+      dockerfile: lab/linux-host.Dockerfile
+      args:
+        BASE_IMAGE: debian:12-slim
+    image: auditbot-lab-debian-host:12
+    container_name: lab-vuln-web-01
+    hostname: vuln-web-01
+    environment:
+      HOST_ROLE: vuln-web
+      ENABLE_NGINX: "0"
+      HTTP_PORTS: ""
+      VULN_HTTP_PORTS: "8081"
+      VULN_FTP_PORTS: "21"
+    networks:
+      dmz_net:
+        ipv4_address: 10.10.20.49
+
   mgmt-monitor-01:
     <<: *linux-host
     build:
