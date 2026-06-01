@@ -4,7 +4,9 @@ from engines.dhcp_analyzer import run_dhcp_diagnostics
 from collectors.raw_writer import write_raw_file
 from reports.pdf_report import generate_full_flow_report
 from vulnerabilities.vuln_analyzer import analyze_scan_data
+from rich import box
 from rich.console import Console
+from rich.table import Table
 
 console = Console()
 
@@ -12,8 +14,12 @@ NOTABLE_VULNERABILITY_MIN_SCORE = 7.0
 
 
 def _confirm_report():
-       answer = console.input("Create PDF report? [y/N]: ").strip().lower()
-       return answer in {"y", "yes"}
+       console.print("\n[bold cyan]Export PDF report?[/bold cyan]")
+       console.print("1. Yes")
+       console.print("2. No")
+
+       answer = console.input("Select [2]: ").strip()
+       return answer == "1"
 
 
 def _maybe_generate_report(data):
@@ -26,7 +32,7 @@ def _maybe_generate_report(data):
               console.print(f"[red]Report generation failed:[/red] {exc}")
               return
 
-       console.print(f"[green]PDF report generated:[/green] {report_file}")
+       console.print(f"[green]PDF report exported to:[/green] {report_file}")
 
 
 def _print_warning(message):
@@ -62,6 +68,7 @@ def _run_vulnerability_analysis(data):
        console.print(f"[green]Services analyzed:[/green] {len(results)}")
        console.print(f"[green]Vulnerabilities matched:[/green] {total_vulns}")
        console.print(f"[green]Notable vulnerabilities:[/green] {len(notable)}")
+       _render_notable_vulnerabilities_table(notable, report.get("report_file"))
 
 
 def _collect_notable_vulnerabilities(report):
@@ -88,6 +95,85 @@ def _collect_notable_vulnerabilities(report):
                             })
 
        return sorted(notable, key=lambda item: _safe_float(item.get("cvss_score")), reverse=True)
+
+
+def _render_notable_vulnerabilities_table(notable, report_file=None, limit=15):
+       if not notable:
+              console.print("[green]No notable local NVD vulnerabilities found.[/green]")
+              return
+
+       table = Table(
+              title="Notable Local NVD Vulnerabilities",
+              box=box.SIMPLE,
+              padding=(0, 1),
+              show_lines=False,
+       )
+       table.add_column("#", justify="right")
+       table.add_column("Host")
+       table.add_column("Service")
+       table.add_column("Product")
+       table.add_column("CVE")
+       table.add_column("Score", justify="right")
+       table.add_column("Severity")
+       table.add_column("Recommendation")
+
+       for index, item in enumerate(notable[:limit], start=1):
+              table.add_row(
+                     str(index),
+                     item.get("hostname") or item.get("host") or "-",
+                     _service_label(item),
+                     _product_label(item),
+                     item.get("cve_id") or "-",
+                     _score_label(item.get("cvss_score")),
+                     _severity_label(item.get("severity")),
+                     item.get("recommendation") or "-",
+              )
+
+       console.print(table)
+
+       remaining = len(notable) - limit
+       if remaining > 0:
+              location = report_file or "the vulnerability report"
+              console.print(f"[yellow]{remaining} additional notable vulnerabilities are available in {location}.[/yellow]")
+
+
+def _service_label(item):
+       port = item.get("port") or "-"
+       protocol = item.get("protocol") or "tcp"
+       service = item.get("service") or "-"
+       return f"{port}/{protocol}:{service}"
+
+
+def _product_label(item):
+       return " ".join(
+              value
+              for value in [item.get("product"), item.get("version")]
+              if value
+       ) or "-"
+
+
+def _score_label(score):
+       score_value = _safe_float(score)
+       label = "-" if score in (None, "") else str(score)
+
+       if score_value >= 9.0:
+              return f"[bold red]{label}[/bold red]"
+       if score_value >= 7.0:
+              return f"[red]{label}[/red]"
+       return label
+
+
+def _severity_label(severity):
+       value = str(severity or "-")
+       normalized = value.lower()
+
+       if normalized == "critical":
+              return f"[bold red]{value}[/bold red]"
+       if normalized == "high":
+              return f"[red]{value}[/red]"
+       if normalized == "medium":
+              return f"[yellow]{value}[/yellow]"
+       return value
 
 
 def _safe_float(value):

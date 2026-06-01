@@ -2,7 +2,7 @@ from rich import box
 from rich.console import Console
 from rich.table import Table
 
-from config.nvd_config import START_YEAR
+from config.nvd_config import NVD_DB_PATH, START_YEAR
 from engines.discovery import run_discovery
 from engines.dhcp_analyzer import run_dhcp_diagnostics
 from vulnerabilities.nvd_downloader import NvdDownloadError, download_modified_feed, download_year_feeds
@@ -139,20 +139,22 @@ def _show_help():
        console.print("- Warns before analysis when the local database was last updated 3 or more days ago.")
        console.print(f"- Writes results to {DEFAULT_REPORT_PATTERN}.")
        console.print()
-       console.print("[bold]6. Init NVD Local Database[/bold]")
-       console.print("- Creates the local SQLite CVE database.")
-       console.print("- Downloads official NVD JSON 2.0 yearly feeds from START_YEAR through the current year.")
-       console.print("- Imports CVE, CVSS, CWE, descriptions, and CPE match ranges into SQLite.")
-       console.print("- Does not use the NVD API.")
+       if _nvd_database_exists():
+              console.print("[bold]6. Update NVD Local Database (Latest Modified Feed)[/bold]")
+              console.print("- Downloads the official NVD JSON 2.0 modified feed.")
+              console.print("- Replaces changed CVE rows and refreshes their CPE matches in SQLite.")
+       else:
+              console.print("[bold]6. Init NVD Local Database[/bold]")
+              console.print("- Creates the local SQLite CVE database.")
+              console.print("- Downloads official NVD JSON 2.0 yearly feeds from START_YEAR through the current year.")
+              console.print("- Imports CVE, CVSS, CWE, descriptions, and CPE match ranges into SQLite.")
+              console.print("- Does not use the NVD API.")
+
        console.print()
-       console.print("[bold]7. Update NVD Local Database (Latest Modified Feed)[/bold]")
-       console.print("- Downloads the official NVD JSON 2.0 modified feed.")
-       console.print("- Replaces changed CVE rows and refreshes their CPE matches in SQLite.")
-       console.print()
-       console.print("[bold]8. Help[/bold]")
+       console.print("[bold]7. Help[/bold]")
        console.print("- Shows this help screen.")
        console.print()
-       console.print("[bold]9. Exit[/bold]")
+       console.print("[bold]8. Exit[/bold]")
        console.print("- Exits AuditBot.")
 
 
@@ -318,6 +320,63 @@ def _safe_float(value):
               return 0.0
 
 
+def _nvd_database_exists():
+       return NVD_DB_PATH.exists()
+
+
+def _menu_options():
+       options = [
+              ("1", "Comprehensive Audit (DHCP + Vulnerability Scan)", _run_comprehensive_audit_menu),
+              ("2", "Infrastructure Discovery (ARP + Nmap)", _run_discovery_menu),
+              ("3", "DHCP Diagnostics", _run_dhcp_menu),
+              ("4", "Draw topology (last scan)", _draw_topology_menu),
+              ("5", "Vulnerability Scan with Local NVD Database", _run_local_nvd_vulnerability_scan_menu),
+       ]
+
+       if _nvd_database_exists():
+              options.append(("6", "Update NVD Local Database (Latest Modified Feed)", _update_nvd_local_database_menu))
+              options.append(("7", "Help", _show_help))
+              options.append(("8", "Exit", None))
+       else:
+              options.append(("6", "Init NVD Local Database", _init_nvd_local_database_menu))
+              options.append(("7", "Help", _show_help))
+              options.append(("8", "Exit", None))
+
+       return options
+
+
+def _run_comprehensive_audit_menu():
+       global LAST_DATA
+
+       ip_mode = _select_ip_mode()
+       data = run_full_flow(ip_mode=ip_mode)
+       if data:
+              LAST_DATA = data
+
+
+def _run_discovery_menu():
+       global LAST_DATA
+
+       ip_mode = _select_ip_mode()
+       LAST_DATA = run_discovery(ip_mode=ip_mode)
+       output_file = write_raw_file(LAST_DATA, "discovery")
+       console.print(f"[green]Discovery JSON exported:[/green] {output_file}")
+
+
+def _draw_topology_menu():
+       global LAST_DATA
+
+       if LAST_DATA:
+              render_topology(LAST_DATA, "current session")
+              return
+
+       LAST_DATA, source_file = load_latest_topology_snapshot()
+       if LAST_DATA:
+              render_topology(LAST_DATA, source_file)
+       else:
+              console.print("[yellow]No scan data found. Run discovery first.[/yellow]")
+
+
 def menu():
 
        show_banner()
@@ -327,57 +386,27 @@ def menu():
        while True:
 
               console.print("\n[bold cyan]=== AuditBot Pro ===[/bold cyan]")
-              console.print("1. Comprehensive Audit (DHCP + Vulnerability Scan)")
-              console.print("2. Infrastructure Discovery (ARP + Nmap)")
-              console.print("3. DHCP Diagnostics")
-              console.print("4. Draw topology (last scan)")
-              console.print("5. Vulnerability Scan with Local NVD Database")
-              console.print("6. Init NVD Local Database")
-              console.print("7. Update NVD Local Database (Latest Modified Feed)")
-              console.print("8. Help")
-              console.print("9. Exit")
+              if not _nvd_database_exists():
+                     console.print(
+                            "[bold red]WARNING: Local NVD database is not initialized. "
+                            "Run option 6 before vulnerability scans.[/bold red]"
+                     )
+
+              options = _menu_options()
+
+              for number, label, _handler in options:
+                     console.print(f"{number}. {label}")
 
               choice = console.input("Select: ")
               console.clear()
 
-              if choice == "1":
-                     ip_mode = _select_ip_mode()
-                     data = run_full_flow(ip_mode=ip_mode)
-                     if data:
-                            LAST_DATA = data
-              
-              elif choice == "2":
-                     ip_mode = _select_ip_mode()
-                     LAST_DATA = run_discovery(ip_mode=ip_mode)
-                     output_file = write_raw_file(LAST_DATA, "discovery")
-                     console.print(f"[green]Discovery JSON exported:[/green] {output_file}")
+              selected = next((option for option in options if option[0] == choice), None)
+              if not selected:
+                     console.print("[yellow]Invalid option.[/yellow]")
+                     continue
 
-              elif choice == "3":
-                     _run_dhcp_menu()
-
-              elif choice == "4":
-                     if LAST_DATA:
-                            render_topology(LAST_DATA, "current session")
-                     else:
-                            LAST_DATA, source_file = load_latest_topology_snapshot()
-                            if LAST_DATA:
-                                   render_topology(LAST_DATA, source_file)
-                            else:
-                                   console.print(
-                                          "[yellow]No scan data found. Run discovery first.[/yellow]"
-                                   )
-
-              elif choice == "5":
-                     _run_local_nvd_vulnerability_scan_menu()
-
-              elif choice == "6":
-                     _init_nvd_local_database_menu()
-
-              elif choice == "7":
-                     _update_nvd_local_database_menu()
-
-              elif choice == "8":
-                     _show_help()
-
-              elif choice == "9":
+              _number, _label, handler = selected
+              if handler is None:
                      break
+
+              handler()

@@ -13,9 +13,9 @@ from vulnerabilities.risk_classifier import classify_risk, generate_recommendati
 from vulnerabilities.service_normalizer import normalize_service
 
 
-DEFAULT_REPORT_DIR = Path("output")
-DEFAULT_REPORT_PATTERN = "output/vulnerability_report_<timestamp>.json"
-DEFAULT_REPORT_PATH = DEFAULT_REPORT_DIR / "vulnerability_report_<timestamp>.json"
+DEFAULT_REPORT_DIR = Path("output") / "vuln"
+DEFAULT_REPORT_PATTERN = "output/vuln/vulnerability_report.json"
+DEFAULT_REPORT_PATH = DEFAULT_REPORT_DIR / "vulnerability_report.json"
 DATABASE_UPDATE_WARNING_DAYS = 3
 
 
@@ -81,12 +81,11 @@ def analyze_scan_data(scan_results, output_file=None, warning_handler=None):
 
 
 def default_vulnerability_report_file():
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = DEFAULT_REPORT_DIR / f"vulnerability_report_{timestamp}.json"
+    output_path = DEFAULT_REPORT_PATH
     counter = 1
 
     while output_path.exists():
-        output_path = DEFAULT_REPORT_DIR / f"vulnerability_report_{timestamp}_{counter}.json"
+        output_path = DEFAULT_REPORT_DIR / f"vulnerability_report_{counter}.json"
         counter += 1
 
     return output_path

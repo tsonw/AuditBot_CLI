@@ -1,9 +1,17 @@
+import typer
+
 from cli.app import app
 from config.nvd_config import START_YEAR
 from core.menu import menu
 from vulnerabilities.nvd_downloader import NvdDownloadError, download_modified_feed, download_year_feeds
 from vulnerabilities.nvd_importer import import_nvd_json, init_db
 from vulnerabilities.vuln_analyzer import analyze_scan_file
+
+
+@app.callback(invoke_without_command=True)
+def main(ctx: typer.Context):
+       if ctx.invoked_subcommand is None:
+              menu()
 
 
 def run():

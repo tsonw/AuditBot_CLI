@@ -71,11 +71,16 @@ class OfflineNvdTest(unittest.TestCase):
         self.assertIn("nvd-update", warning)
 
     def test_default_report_filename_does_not_overwrite_existing_report(self):
-        with patch("vulnerabilities.vuln_analyzer.DEFAULT_REPORT_DIR", Path(self.temp_dir.name)):
+        with (
+            patch("vulnerabilities.vuln_analyzer.DEFAULT_REPORT_DIR", Path(self.temp_dir.name)),
+            patch("vulnerabilities.vuln_analyzer.DEFAULT_REPORT_PATH", Path(self.temp_dir.name) / "vulnerability_report.json"),
+        ):
             first_path = write_report({"results": []})
             second_path = write_report({"results": []})
 
         self.assertNotEqual(first_path, second_path)
+        self.assertEqual(first_path.name, "vulnerability_report.json")
+        self.assertEqual(second_path.name, "vulnerability_report_1.json")
         self.assertTrue(first_path.exists())
         self.assertTrue(second_path.exists())
 

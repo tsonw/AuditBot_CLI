@@ -2,6 +2,7 @@
 VENV = venv
 PYTHON = $(VENV)/bin/python
 PIP = $(VENV)/bin/pip
+SUDO ?=
 COMPOSE = docker compose -f lab/docker-compose.yml
 VULN_COMPOSE = docker compose -f lab/vulnerability/docker-compose.yml
 DHCP_SCENARIOS = normal no-offer no-ack rogue pool-exhausted
@@ -19,7 +20,7 @@ freeze:
 
 # ====== RUN ======
 run:
-	sudo PYTHONDONTWRITEBYTECODE=1 $(PYTHON) main.py
+	$(SUDO) env PYTHONDONTWRITEBYTECODE=1 $(PYTHON) main.py run
 
 # ====== DEV ======
 activate:
