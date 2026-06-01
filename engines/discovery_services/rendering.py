@@ -6,24 +6,27 @@ from rich.table import Table
 
 console = Console()
 
-COMPACT_TABLE_KWARGS = {
-       "box": box.SIMPLE,
+DISCOVERY_TABLE_KWARGS = {
+       "box": box.SQUARE,
+       "border_style": "cyan",
+       "header_style": "bold yellow",
        "padding": (0, 1),
-       "show_lines": False,
+       "row_styles": ["", "white"],
+       "show_lines": True,
 }
 
 
 def render_networks_table(networks):
-       table = Table(title="Discovery Targets", **COMPACT_TABLE_KWARGS)
+       table = Table(title="Discovery Targets", **DISCOVERY_TABLE_KWARGS)
        table.add_column("#", justify="right")
-       table.add_column("Network")
-       table.add_column("Scanner IP")
-       table.add_column("Family")
-       table.add_column("Interface")
-       table.add_column("Gateway")
-       table.add_column("Source")
-       table.add_column("Scan")
-       table.add_column("Status")
+       table.add_column("Network", justify="center")
+       table.add_column("Scanner IP", justify="center")
+       table.add_column("Family", justify="center")
+       table.add_column("Interface", justify="center")
+       table.add_column("Gateway", justify="center")
+       table.add_column("Source", justify="center")
+       table.add_column("Scan", justify="center")
+       table.add_column("Status", justify="center")
 
        for index, net in enumerate(networks, start=1):
               status = net.get("scan_skipped_reason") or "ready"
@@ -43,7 +46,7 @@ def render_networks_table(networks):
 
 
 def render_hosts_table(hosts):
-       table = Table(title="Discovery Hosts", **COMPACT_TABLE_KWARGS)
+       table = Table(title="Discovery Hosts", **DISCOVERY_TABLE_KWARGS)
        table.add_column("#", justify="right")
        table.add_column("IP")
        table.add_column("Hostname")
@@ -112,7 +115,7 @@ def render_errors_table(errors):
        if not errors:
               return
 
-       table = Table(title="Discovery Warnings", **COMPACT_TABLE_KWARGS)
+       table = Table(title="Discovery Warnings", **DISCOVERY_TABLE_KWARGS)
        table.add_column("Network")
        table.add_column("Interface")
        table.add_column("Error")

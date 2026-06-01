@@ -1,0 +1,10 @@
+authorized_subnets:
+  - 192.168.1.0/24
+
+scan_policy:
+  max_prefix: 24
+  max_hosts: 256
+  rate_limit: low
+  require_authorization: true
+  passive_first: true
+  allow_external_inference: true
